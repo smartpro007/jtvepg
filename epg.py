@@ -10,13 +10,16 @@ nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान 
 
 def getChannelsFromFile():
     if os.path.isfile("channels.json"):
-        with open("channels.json", "r", encoding="utf-8") as f:
-            data = json.load(f)
-            result = data.get("result", [])
-            # JSON मधील डेटा list किंवा dictionary दोन्ही स्वरूपात हाताळण्यासाठी
-            if isinstance(result, dict):
-                return list(result.values())
-            return result
+        try:
+            with open("channels.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+                result = data.get("result", [])
+                if isinstance(result, list):
+                    return result
+                elif isinstance(result, dict):
+                    return list(result.values())
+        except Exception as e:
+            print("Error reading channels.json:", e)
     return []
 
 def getEpg(channelId, offset, langId):
@@ -39,7 +42,8 @@ def writeEpgChannel(id, name, iconId, fp):
     name = str(name).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
     fp.write(f"\t<channel id=\"{id}\">\n")
     fp.write(f"\t\t<display-name>{name}</display-name>\n")
-    fp.write(f"\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/images/{iconId}\"></icon>\n")
+    if iconId:
+        fp.write(f"\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/images/{iconId}\"></icon>\n")
     fp.write("\t</channel>\n")
 
 def writeEpgProgram(channelId, epg, fp):
@@ -89,10 +93,11 @@ def grabEpgAllChannel(day, channelList):
     programFile = open(f"program{day}.xml", "w", encoding='utf-8')
     for channel in channelList:
         cId = channel.get("channel_id")
-        epgData = getEpg(cId, day, 6)
-        if epgData:
-            for epg in epgData:
-                writeEpgProgram(cId, epg, programFile)
+        if cId:
+            epgData = getEpg(cId, day, 6)
+            if epgData:
+                for epg in epgData:
+                    writeEpgProgram(cId, epg, programFile)
     programFile.close()
 
 def mergeEpgData(channelList):
@@ -137,6 +142,7 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 
 mergeEpgData(channelList)
 
+# epg.xml ला थेट epg.xml.gz मध्ये कॉम्प्रेस करणे
 with open('epg.xml', 'rb') as f_in:
     with gzip.open('epg.xml.gz', 'wb') as f_out:
         shutil.copyfileobj(f_in, f_out)
@@ -145,7 +151,7 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
     if os.path.isfile(f'./program{day}.xml'):
         os.remove(f'./program{day}.xml')
 
-if os.path.isfile('./epg.xml'):
-    os.remove('./epg.xml')
+if os.path.isfile('./channels.xml'):
+    os.remove('./channels.xml')
 
-print("epg.xml.gz and epg1d.xml successfully created using local channels.json!")
+print("epg.xml.gz and epg1d.xml successfully created!")
