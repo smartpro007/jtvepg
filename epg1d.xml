@@ -3527,19 +3527,15 @@
 	</channel>
 	<channel id="3091">
 		<display-name>RedBull UltraView</display-name>
-		<icon src="https://jiotv.catchup.cdn.jio.com/dare_images/images/"></icon>
 	</channel>
 	<channel id="3092">
 		<display-name>RedBull 360degree</display-name>
-		<icon src="https://jiotv.catchup.cdn.jio.com/dare_images/images/"></icon>
 	</channel>
 	<channel id="3093">
 		<display-name>RedBull Cam01</display-name>
-		<icon src="https://jiotv.catchup.cdn.jio.com/dare_images/images/"></icon>
 	</channel>
 	<channel id="3094">
 		<display-name>RedBull Cam02</display-name>
-		<icon src="https://jiotv.catchup.cdn.jio.com/dare_images/images/"></icon>
 	</channel>
 	<channel id="3095">
 		<display-name>NDTV Marathi</display-name>
@@ -3691,7 +3687,6 @@
 	</channel>
 	<channel id="3147">
 		<display-name>RedBull Cam03</display-name>
-		<icon src="https://jiotv.catchup.cdn.jio.com/dare_images/images/"></icon>
 	</channel>
 	<channel id="3148">
 		<display-name>Live India News 24</display-name>
