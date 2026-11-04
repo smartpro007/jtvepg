@@ -5,8 +5,8 @@ import os
 import gzip
 import shutil
 
-prevEpgDayCount = 1   # मागील १ दिवस
-nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
+prevEpgDayCount = 1   
+nextEpgDayCount = 2   
 
 def getChannelsFromFile():
     if os.path.isfile("channels.json"):
@@ -26,14 +26,19 @@ def getEpg(channelId, offset, langId):
     try:
         reqUrl = f"https://jiotv.data.cdn.jio.com/apis/v1.3/getepg/get?channel_id={channelId}&offset={offset}&langId={langId}"
         headers = {
-            "User-Agent": "okhttp/4.2.2"
+            "User-Agent": "JioTV/6.0.3 (Linux; Android 13)",
+            "Accept": "application/json, text/plain, */*",
+            "x-platform": "android",
+            "os": "android"
         }
         response = requests.get(reqUrl, headers=headers)
+        print(f"Channel {channelId} offset {offset} Status: {response.status_code}")
         if response.status_code == 200:
             apiData = json.loads(response.text or "{}")
             return apiData.get("epg", [])
         return []
     except Exception as e:
+        print(f"Error fetching EPG for {channelId}: {e}")
         return []
 
 def writeEpgChannel(id, name, iconId, fp):
@@ -122,7 +127,7 @@ def mergeEpgData(channelList):
     with open("epg1d.xml", "w", encoding='utf-8') as epgFile1d:
         epgFile1d.write("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
         epgFile1d.write("<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n")
-        epgFile1d.write("<tv generator-info-name=\"JioTV EPG\" generator-info-url=\"https://github.com\">\n")
+        epgFile1d.write("<tv generator-info-name=\"JioTV Epg\" generator-info-url=\"https://github.com\">\n")
         epgFile1d.write(channelsContent)
         if os.path.isfile('./program0.xml'):
             with open('./program0.xml', "r", encoding='utf-8') as programsFile:
@@ -142,7 +147,6 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 
 mergeEpgData(channelList)
 
-# epg.xml ला थेट epg.xml.gz मध्ये कॉम्प्रेस करणे
 with open('epg.xml', 'rb') as f_in:
     with gzip.open('epg.xml.gz', 'wb') as f_out:
         shutil.copyfileobj(f_in, f_out)
