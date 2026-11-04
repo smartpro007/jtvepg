@@ -4,7 +4,7 @@ on:
   schedule:
     # दररोज सकाळी ६ वाजता आणि संध्याकाळी ६ वाजता ऑटोमॅटिक रन होईल (UTC वेळेनुसार)
     - cron: '0 0,12 * * *'
-  workflow_dispatch: # मॅन्युअली (हाताने) रन करण्यासाठी बटन उपलब्ध करेल
+  workflow_dispatch: # मॅन्युअली (हाताने) रन करण्यासाठी बटन
 
 jobs:
   build:
@@ -32,7 +32,7 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add epg.xml epg.xml.gz epg1d.xml channels.xml program*.xml
-        git commit -m "Auto-update JioTV EPG and GZ data [skip ci]" || echo "No changes to commit"
+        git add epg.xml.gz epg1d.xml channels.json
+        git commit -m "Auto-update JioTV EPG data [skip ci]" || echo "No changes to commit"
         git push
         
