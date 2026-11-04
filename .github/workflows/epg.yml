@@ -1,0 +1,38 @@
+name: Generate JioTV EPG
+
+on:
+  schedule:
+    # दररोज सकाळी ६ वाजता आणि संध्याकाळी ६ वाजता ऑटोमॅटिक रन होईल (UTC वेळेनुसार)
+    - cron: '0 0,12 * * *'
+  workflow_dispatch: # मॅन्युअली (हाताने) रन करण्यासाठी बटन उपलब्ध करेल
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+
+    - name: Run EPG Generator Script
+      run: |
+        python epg.py
+
+    - name: Commit and push generated EPG files
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add epg.xml epg.xml.gz epg1d.xml channels.xml program*.xml
+        git commit -m "Auto-update JioTV EPG and GZ data [skip ci]" || echo "No changes to commit"
+        git push
+        
