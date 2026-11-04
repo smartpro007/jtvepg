@@ -13,24 +13,36 @@ channelList = []
 
 def getChannels():
     reqUrl = "https://jiotv.data.cdn.jio.com/apis/v1.4/getMobileChannelList/get/?os=android&devicetype=phone"
-    response = requests.get(reqUrl)
-    apiData = json.loads(response.text)
-    return apiData["result"]
+    headers = {
+        "User-Agent": "okhttp/4.9.3"
+    }
+    response = requests.get(reqUrl, headers=headers)
+    print("Channels status: " + str(response.status_code))
+    try:
+        apiData = json.loads(response.text)
+        return apiData.get("result", [])
+    except json.JSONDecodeError:
+        print("Response text was not JSON:", response.text)
+        return []
 
 
 def getEpg(channelId, offset, langId):
     try:
-        reqUrl = "https://jiotv.data.cdn.jio.com/apis/v1.3/getepg/get?channel_id=" + \
-            str(channelId)+"&offset="+str(offset)+"&langId="+str(langId)
-        response = requests.get(reqUrl)
+        reqUrl = f"https://jiotv.data.cdn.jio.com/apis/v1.3/getepg/get?channel_id={channelId}&offset={offset}&langId={langId}"
+        headers = {
+            "User-Agent": "okhttp/4.9.3"
+        }
+        response = requests.get(reqUrl, headers=headers)
         print("OK: " + str(response.ok) + " status: " + str(response.status_code))
         if (response.status_code == 200):
             apiData = json.loads(response.text or "{}")
-            return apiData["epg"]
+            return apiData.get("epg", [])
         return []
     except requests.exceptions.Timeout:
         return []
     except requests.exceptions.ConnectionError:
+        return []
+    except json.JSONDecodeError:
         return []
 
 
@@ -73,10 +85,10 @@ def writeEpgProgram(channelId, epg, fp):
     description = description.replace("'", "&apos;")
     description = description.replace('"', "&quot;")
 
-    director = epg["director"]
-    actors = str(epg["starCast"]).split(", ")
-    category = epg["showCategory"]
-    episodeNum = epg["episode_num"]
+    director = epg.get("director", "")
+    actors = str(epg.get("starCast", "")).split(", ")
+    category = epg.get("showCategory", "")
+    episodeNum = epg.get("episode_num", "")
 
     try:
         fp.write("\t<programme start=\""+str(progStart)+"\" stop=\"" +
@@ -89,14 +101,15 @@ def writeEpgProgram(channelId, epg, fp):
                 fp.write("\t\t\t<director>" + director + "</director>\n")
             if(len(actors)):
                 for actor in actors:
-                    fp.write("\t\t\t<actor>" + actor + "</actor>\n")
+                    if actor.strip():
+                        fp.write("\t\t\t<actor>" + actor + "</actor>\n")
             fp.write("\t\t</credits>\n")
         if(category):
             fp.write("\t\t<category lang=\"en\">" + category + "</category>\n")
         if(episodeNum):
             fp.write("\t\t<episode-num system=\"onscreen\">" + str(episodeNum) + "</episode-num>\n")
         fp.write("\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/shows/" +
-                 str(epg["episodePoster"])+"\"></icon>\n")
+                 str(epg.get("episodePoster", ""))+"\"></icon>\n")
         fp.write("\t</programme>\n")
     except UnicodeEncodeError:
         print("it was not a ascii-encoded unicode string")
@@ -173,6 +186,10 @@ def mergeEpgData():
 
 # Process starts here
 channelList = getChannels()
+if not channelList:
+    print("Channel list is empty! Exiting process.")
+    exit(1)
+
 progress = 0
 channelFile = open("channels.xml", "a", encoding='utf-8')
 for channel in channelList:
