@@ -8,23 +8,16 @@ import shutil
 prevEpgDayCount = 1   # मागील १ दिवस
 nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
 
-def getChannels():
-    reqUrl = "https://jiotv.data.cdn.jio.com/apis/v1.4/getMobileChannelList/get/?os=android&devicetype=phone"
-    headers = {
-        "User-Agent": "okhttp/4.2.2",
-        "os": "android",
-        "devicetype": "phone"
-    }
-    try:
-        response = requests.get(reqUrl, headers=headers)
-        print("Channels API Status: " + str(response.status_code))
-        if response.status_code == 200:
-            apiData = json.loads(response.text or "{}")
-            return apiData.get("result", [])
-    except Exception as e:
-        print("Error fetching channels:", e)
+def getChannelsFromFile():
+    if os.path.isfile("channels.json"):
+        with open("channels.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+            result = data.get("result", [])
+            # JSON मधील डेटा list किंवा dictionary दोन्ही स्वरूपात हाताळण्यासाठी
+            if isinstance(result, dict):
+                return list(result.values())
+            return result
     return []
-
 
 def getEpg(channelId, offset, langId):
     try:
@@ -40,7 +33,6 @@ def getEpg(channelId, offset, langId):
     except Exception as e:
         return []
 
-
 def writeEpgChannel(id, name, iconId, fp):
     if id is None or name is None:
         return
@@ -49,7 +41,6 @@ def writeEpgChannel(id, name, iconId, fp):
     fp.write(f"\t\t<display-name>{name}</display-name>\n")
     fp.write(f"\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/images/{iconId}\"></icon>\n")
     fp.write("\t</channel>\n")
-
 
 def writeEpgProgram(channelId, epg, fp):
     if channelId is None or epg is None:
@@ -93,7 +84,6 @@ def writeEpgProgram(channelId, epg, fp):
     except Exception as e:
         pass
 
-
 def grabEpgAllChannel(day, channelList):
     print(f"Getting EPG for all channels for day {day}")
     programFile = open(f"program{day}.xml", "w", encoding='utf-8')
@@ -105,9 +95,7 @@ def grabEpgAllChannel(day, channelList):
                 writeEpgProgram(cId, epg, programFile)
     programFile.close()
 
-
 def mergeEpgData(channelList):
-    # चॅनेल फाईल तयार करणे
     with open("channels.xml", "w", encoding='utf-8') as channelFile:
         for channel in channelList:
             writeEpgChannel(channel.get("channel_id"), channel.get("channel_name"), channel.get("logoUrl"), channelFile)
@@ -115,7 +103,6 @@ def mergeEpgData(channelList):
     with open("channels.xml", "r", encoding='utf-8') as channelsFile:
         channelsContent = channelsFile.read()
 
-    # संपूर्ण epg.xml तयार करणे
     with open("epg.xml", "w", encoding='utf-8') as epgFile:
         epgFile.write("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
         epgFile.write("<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n")
@@ -127,7 +114,6 @@ def mergeEpgData(channelList):
                     epgFile.write(programsFile.read())
         epgFile.write("</tv>\n")
 
-    # फक्त आजचा (Single day) epg1d.xml तयार करणे
     with open("epg1d.xml", "w", encoding='utf-8') as epgFile1d:
         epgFile1d.write("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
         epgFile1d.write("<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n")
@@ -138,33 +124,28 @@ def mergeEpgData(channelList):
                 epgFile1d.write(programsFile.read())
         epgFile1d.write("</tv>\n")
 
-
 # Process starts here
-channelList = getChannels()
+channelList = getChannelsFromFile()
 if not channelList:
-    print("Could not fetch channel list. Exiting.")
+    print("channels.json not found or empty! Exiting.")
     exit(1)
 
-print(f"Total channels found: {len(channelList)}")
+print(f"Total channels loaded from JSON: {len(channelList)}")
 
 for day in range((prevEpgDayCount * -1), nextEpgDayCount):
     grabEpgAllChannel(day, channelList)
 
 mergeEpgData(channelList)
 
-# epg.xml ला थेट epg.xml.gz मध्ये कॉम्प्रेस करणे
 with open('epg.xml', 'rb') as f_in:
     with gzip.open('epg.xml.gz', 'wb') as f_out:
         shutil.copyfileobj(f_in, f_out)
 
-# तात्पुरत्या program फाईल्स डिलीट करणे
 for day in range((prevEpgDayCount * -1), nextEpgDayCount):
     if os.path.isfile(f'./program{day}.xml'):
         os.remove(f'./program{day}.xml')
 
-# channels.xml आणि मुख्य epg.xml सुद्धा रिपॉझिटरीवरून काढायचे असल्यास काढू शकतो, पण हवी असल्यास ठेवू शकतो
 if os.path.isfile('./epg.xml'):
     os.remove('./epg.xml')
 
-print("epg.xml.gz and epg1d.xml created successfully for all channels!")
-print("Action complete")
+print("epg.xml.gz and epg1d.xml successfully created using local channels.json!")
