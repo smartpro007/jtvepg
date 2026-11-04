@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE tv SYSTEM "xmltv.dtd">
-<tv generator-info-name="JioTV EPG" generator-info-url="https://github.com">
+<tv generator-info-name="JioTV Epg" generator-info-url="https://github.com">
 	<channel id="1136">
 		<display-name>Star Utsav Movies</display-name>
 		<icon src="https://jiotv.catchup.cdn.jio.com/dare_images/images/StarUtsavMovies1.png"></icon>
