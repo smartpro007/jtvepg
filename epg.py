@@ -1,30 +1,20 @@
 import requests
 import json
 import datetime
-from datetime import timezone
+from datetime import timezone, timedelta
 import os
 import gzip
 import shutil
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# भारताची वेळ (IST = UTC + 5:30) सेट करणे
+IST = timezone(timedelta(hours=5, minutes=30))
 
 prevEpgDayCount = 1   # मागील १ दिवस
 nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
 
 # तुझी होस्टिंगची EPG API युआरएल
 HOSTING_EPG_URL = "https://iptvmax.site/api/epg/epg.php"
-
-def clean_xml_text(text):
-    if not text:
-        return ""
-    text = str(text)
-    text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
-    text = (text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("'", "&apos;")
-                .replace('"', "&quot;"))
-    return text
 
 def getChannelsFromFile():
     if os.path.isfile("channels.json"):
@@ -57,9 +47,9 @@ def getEpg(channelId, offset, langId):
 def writeEpgChannel(id, name, iconId, fp):
     if id is None or name is None:
         return
-    safe_name = clean_xml_text(name)
+    name = str(name).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
     fp.write(f"\t<channel id=\"{id}\">\n")
-    fp.write(f"\t\t<display-name>{safe_name}</display-name>\n")
+    fp.write(f"\t\t<display-name>{name}</display-name>\n")
     if iconId:
         fp.write(f"\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/images/{iconId}\"></icon>\n")
     fp.write("\t</channel>\n")
@@ -68,7 +58,7 @@ def writeEpgProgram(channelId, epg, fp):
     if channelId is None or epg is None:
         return
     try:
-        # इपॉक व्हॅल्यू सेफली सेकंदात आणणे
+        # इपॉक सेफली सेकंदात आणणे
         start_epoch_val = int(epg["startEpoch"])
         if start_epoch_val > 9999999999: 
             start_epoch_val = start_epoch_val // 1000
@@ -77,29 +67,29 @@ def writeEpgProgram(channelId, epg, fp):
         if end_epoch_val > 9999999999:
             end_epoch_val = end_epoch_val // 1000
 
-        # थेट UTC वेळ सेट करणे (XMLTV Standard +0000)
-        startTime = datetime.datetime.fromtimestamp(start_epoch_val, timezone.utc)
-        progStart = startTime.strftime("%Y%m%d%H%M%S +0000")
+        # अचूक भारतीय वेळेनुसार (IST +0530) रूपांतर करणे जेणेकरून वर्तमान वेळ अगदी बरोबर येईल
+        startTime = datetime.datetime.fromtimestamp(start_epoch_val, timezone.utc).astimezone(IST)
+        progStart = startTime.strftime("%Y%m%d%H%M%S +0530")
 
-        endTime = datetime.datetime.fromtimestamp(end_epoch_val, timezone.utc)
-        progEnd = endTime.strftime("%Y%m%d%H%M%S +0000")
+        endTime = datetime.datetime.fromtimestamp(end_epoch_val, timezone.utc).astimezone(IST)
+        progEnd = endTime.strftime("%Y%m%d%H%M%S +0530")
 
-        title = clean_xml_text(epg.get("showname", ""))
-        description = clean_xml_text(epg.get("episode_desc") or epg.get("description", ""))
+        title = str(epg.get("showname", "")).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
+        description = str(epg.get("episode_desc") or epg.get("description", "")).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
 
-        director = clean_xml_text(epg.get("director", ""))
-        actors = [clean_xml_text(a) for a in str(epg.get("starCast", "")).split(", ")]
-        category = clean_xml_text(epg.get("showCategory", ""))
-        episodeNum = clean_xml_text(epg.get("episode_num", ""))
+        director = epg.get("director", "")
+        actors = str(epg.get("starCast", "")).split(", ")
+        category = epg.get("showCategory", "")
+        episodeNum = epg.get("episode_num", "")
 
         fp.write(f"\t<programme start=\"{progStart}\" stop=\"{progEnd}\" channel=\"{channelId}\">\n")
         fp.write(f"\t\t<title lang=\"en\">{title}</title>\n")
         fp.write(f"\t\t<desc lang=\"en\">{description}</desc>\n")
-        if director or any(actors):
+        if director or len(actors):
             fp.write("\t\t<credits>\n")
             if director:
                 fp.write(f"\t\t\t<director>{director}</director>\n")
-            if actors:
+            if len(actors):
                 for actor in actors:
                     if actor.strip():
                         fp.write(f"\t\t\t<actor>{actor.strip()}</actor>\n")
@@ -117,7 +107,8 @@ def writeEpgProgram(channelId, epg, fp):
         pass
 
 def grabEpgAllChannel(day, channelList):
-    print(f"Getting EPG concurrently for all channels for day {day} (UTC)")
+    print(f"Getting EPG concurrently for all channels for day {day}")
+    programFile = open(f"program{day}.xml", "w", encoding='utf-8')
     
     def fetch_channel(channel):
         cId = channel.get("channel_id")
@@ -126,7 +117,7 @@ def grabEpgAllChannel(day, channelList):
             return cId, epgData
         return None, []
 
-    all_programs = []
+    # एकाच वेळी १५ चॅनेल्सचा डेटा फेच करण्यासाठी ThreadPool वापरला आहे
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {executor.submit(fetch_channel, channel): channel for channel in channelList}
         for future in as_completed(futures):
@@ -134,13 +125,11 @@ def grabEpgAllChannel(day, channelList):
                 cId, epgData = future.result()
                 if epgData and cId:
                     for epg in epgData:
-                        all_programs.append((cId, epg))
+                        writeEpgProgram(cId, epg, programFile)
             except Exception as e:
                 pass
 
-    with open(f"program{day}.xml", "w", encoding='utf-8') as programFile:
-        for cId, epg in all_programs:
-            writeEpgProgram(cId, epg, programFile)
+    programFile.close()
 
 def mergeEpgData(channelList):
     with open("channels.xml", "w", encoding='utf-8') as channelFile:
@@ -184,6 +173,7 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 
 mergeEpgData(channelList)
 
+# epg.xml ला थेट epg.xml.gz मध्ये कॉम्प्रेस करणे
 with open('epg.xml', 'rb') as f_in:
     with gzip.open('epg.xml.gz', 'wb') as f_out:
         shutil.copyfileobj(f_in, f_out)
@@ -195,4 +185,4 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 if os.path.isfile('./channels.xml'):
     os.remove('./channels.xml')
 
-print("epg.xml.gz and epg1d.xml successfully created safely!")
+print("epg.xml.gz and epg1d.xml successfully created with Multithreading & IST Time Fix!")
