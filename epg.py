@@ -71,7 +71,6 @@ def writeEpgProgram(channelId, epg, fp):
     if channelId is None or epg is None:
         return
     try:
-        # IST वेळेनुसार बरोबर वेळ रूपांतरित करणे
         startTime = datetime.datetime.fromtimestamp(int(epg["startEpoch"]/1000), IST)
         progStart = startTime.strftime("%Y%m%d%H%M%S +0530")
 
@@ -112,7 +111,6 @@ def writeEpgProgram(channelId, epg, fp):
 
 def grabEpgAllChannel(day, channelList):
     print(f"Getting EPG concurrently for all channels for day {day} (IST)")
-    programFile = open(f"program{day}.xml", "w", encoding='utf-8')
     
     def fetch_channel(channel):
         cId = channel.get("channel_id")
@@ -121,6 +119,7 @@ def grabEpgAllChannel(day, channelList):
             return cId, epgData
         return None, []
 
+    all_programs = []
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {executor.submit(fetch_channel, channel): channel for channel in channelList}
         for future in as_completed(futures):
@@ -128,11 +127,14 @@ def grabEpgAllChannel(day, channelList):
                 cId, epgData = future.result()
                 if epgData and cId:
                     for epg in epgData:
-                        writeEpgProgram(cId, epg, programFile)
+                        all_programs.append((cId, epg))
             except Exception as e:
                 pass
 
-    programFile.close()
+    # सुरक्षितपणे एकाच वेळी फाईलमध्ये डेटा लिहिणे
+    with open(f"program{day}.xml", "w", encoding='utf-8') as programFile:
+        for cId, epg in all_programs:
+            writeEpgProgram(cId, epg, programFile)
 
 def mergeEpgData(channelList):
     with open("channels.xml", "w", encoding='utf-8') as channelFile:
@@ -187,4 +189,4 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 if os.path.isfile('./channels.xml'):
     os.remove('./channels.xml')
 
-print("epg.xml.gz and epg1d.xml successfully created with IST time!")
+print("epg.xml.gz and epg1d.xml successfully created safely!")
