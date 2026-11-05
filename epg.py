@@ -4,6 +4,7 @@ import datetime
 import os
 import gzip
 import shutil
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 prevEpgDayCount = 1   # मागील १ दिवस
@@ -11,6 +12,19 @@ nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान 
 
 # तुझी होस्टिंगची EPG API युआरएल
 HOSTING_EPG_URL = "https://iptvmax.site/api/epg/epg.php"
+
+def clean_xml_text(text):
+    if not text:
+        return ""
+    # XML साठी घातक असणारी अवैध कॅरेक्टर्स आणि कंट्रोल कोड्स काढून टाकणे
+    text = str(text)
+    text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+    text = (text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("'", "&apos;")
+                .replace('"', "&quot;"))
+    return text
 
 def getChannelsFromFile():
     if os.path.isfile("channels.json"):
@@ -43,9 +57,9 @@ def getEpg(channelId, offset, langId):
 def writeEpgChannel(id, name, iconId, fp):
     if id is None or name is None:
         return
-    name = str(name).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
+    safe_name = clean_xml_text(name)
     fp.write(f"\t<channel id=\"{id}\">\n")
-    fp.write(f"\t\t<display-name>{name}</display-name>\n")
+    fp.write(f"\t\t<display-name>{safe_name}</display-name>\n")
     if iconId:
         fp.write(f"\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/images/{iconId}\"></icon>\n")
     fp.write("\t</channel>\n")
@@ -60,22 +74,22 @@ def writeEpgProgram(channelId, epg, fp):
         endTime = datetime.datetime.fromtimestamp(int(epg["endEpoch"]/1000))
         progEnd = endTime.strftime("%Y%m%d%H%M%S +0000")
 
-        title = str(epg.get("showname", "")).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
-        description = str(epg.get("episode_desc") or epg.get("description", "")).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
+        title = clean_xml_text(epg.get("showname", ""))
+        description = clean_xml_text(epg.get("episode_desc") or epg.get("description", ""))
 
-        director = epg.get("director", "")
-        actors = str(epg.get("starCast", "")).split(", ")
-        category = epg.get("showCategory", "")
-        episodeNum = epg.get("episode_num", "")
+        director = clean_xml_text(epg.get("director", ""))
+        actors = [clean_xml_text(a) for a in str(epg.get("starCast", "")).split(", ")]
+        category = clean_xml_text(epg.get("showCategory", ""))
+        episodeNum = clean_xml_text(epg.get("episode_num", ""))
 
         fp.write(f"\t<programme start=\"{progStart}\" stop=\"{progEnd}\" channel=\"{channelId}\">\n")
         fp.write(f"\t\t<title lang=\"en\">{title}</title>\n")
         fp.write(f"\t\t<desc lang=\"en\">{description}</desc>\n")
-        if director or len(actors):
+        if director or any(actors):
             fp.write("\t\t<credits>\n")
             if director:
                 fp.write(f"\t\t\t<director>{director}</director>\n")
-            if len(actors):
+            if actors:
                 for actor in actors:
                     if actor.strip():
                         fp.write(f"\t\t\t<actor>{actor.strip()}</actor>\n")
@@ -103,7 +117,6 @@ def grabEpgAllChannel(day, channelList):
             return cId, epgData
         return None, []
 
-    # एकाच वेळी १५ चॅनेल्सचा डेटा फेच करण्यासाठी ThreadPool वापरला आहे
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {executor.submit(fetch_channel, channel): channel for channel in channelList}
         for future in as_completed(futures):
@@ -171,4 +184,4 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 if os.path.isfile('./channels.xml'):
     os.remove('./channels.xml')
 
-print("epg.xml.gz and epg1d.xml successfully created with Multithreading!")
+print("epg.xml.gz and epg1d.xml successfully created safely!")
