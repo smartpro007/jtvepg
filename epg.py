@@ -1,15 +1,12 @@
 import requests
 import json
 import datetime
-from datetime import timezone, timedelta
+from datetime import timezone
 import os
 import gzip
 import shutil
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# भारताची वेळ (IST = UTC + 5:30) सेट करणे
-IST = timezone(timedelta(hours=5, minutes=30))
 
 prevEpgDayCount = 1   # मागील १ दिवस
 nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
@@ -71,11 +68,21 @@ def writeEpgProgram(channelId, epg, fp):
     if channelId is None or epg is None:
         return
     try:
-        startTime = datetime.datetime.fromtimestamp(int(epg["startEpoch"]/1000), IST)
-        progStart = startTime.strftime("%Y%m%d%H%M%S +0530")
+        # इपॉक व्हॅल्यू सेफली सेकंदात आणणे
+        start_epoch_val = int(epg["startEpoch"])
+        if start_epoch_val > 9999999999: 
+            start_epoch_val = start_epoch_val // 1000
+            
+        end_epoch_val = int(epg["endEpoch"])
+        if end_epoch_val > 9999999999:
+            end_epoch_val = end_epoch_val // 1000
 
-        endTime = datetime.datetime.fromtimestamp(int(epg["endEpoch"]/1000), IST)
-        progEnd = endTime.strftime("%Y%m%d%H%M%S +0530")
+        # थेट UTC वेळ सेट करणे (XMLTV Standard +0000)
+        startTime = datetime.datetime.fromtimestamp(start_epoch_val, timezone.utc)
+        progStart = startTime.strftime("%Y%m%d%H%M%S +0000")
+
+        endTime = datetime.datetime.fromtimestamp(end_epoch_val, timezone.utc)
+        progEnd = endTime.strftime("%Y%m%d%H%M%S +0000")
 
         title = clean_xml_text(epg.get("showname", ""))
         description = clean_xml_text(epg.get("episode_desc") or epg.get("description", ""))
@@ -110,7 +117,7 @@ def writeEpgProgram(channelId, epg, fp):
         pass
 
 def grabEpgAllChannel(day, channelList):
-    print(f"Getting EPG concurrently for all channels for day {day} (IST)")
+    print(f"Getting EPG concurrently for all channels for day {day} (UTC)")
     
     def fetch_channel(channel):
         cId = channel.get("channel_id")
@@ -131,7 +138,6 @@ def grabEpgAllChannel(day, channelList):
             except Exception as e:
                 pass
 
-    # सुरक्षितपणे एकाच वेळी फाईलमध्ये डेटा लिहिणे
     with open(f"program{day}.xml", "w", encoding='utf-8') as programFile:
         for cId, epg in all_programs:
             writeEpgProgram(cId, epg, programFile)
