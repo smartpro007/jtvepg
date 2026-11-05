@@ -1,11 +1,15 @@
 import requests
 import json
 import datetime
+from datetime import timezone, timedelta
 import os
 import gzip
 import shutil
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# भारताची वेळ (IST = UTC + 5:30) सेट करणे
+IST = timezone(timedelta(hours=5, minutes=30))
 
 prevEpgDayCount = 1   # मागील १ दिवस
 nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
@@ -16,7 +20,6 @@ HOSTING_EPG_URL = "https://iptvmax.site/api/epg/epg.php"
 def clean_xml_text(text):
     if not text:
         return ""
-    # XML साठी घातक असणारी अवैध कॅरेक्टर्स आणि कंट्रोल कोड्स काढून टाकणे
     text = str(text)
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     text = (text.replace("&", "&amp;")
@@ -68,11 +71,12 @@ def writeEpgProgram(channelId, epg, fp):
     if channelId is None or epg is None:
         return
     try:
-        startTime = datetime.datetime.fromtimestamp(int(epg["startEpoch"]/1000))
-        progStart = startTime.strftime("%Y%m%d%H%M%S +0000")
+        # IST वेळेनुसार बरोबर वेळ रूपांतरित करणे
+        startTime = datetime.datetime.fromtimestamp(int(epg["startEpoch"]/1000), IST)
+        progStart = startTime.strftime("%Y%m%d%H%M%S +0530")
 
-        endTime = datetime.datetime.fromtimestamp(int(epg["endEpoch"]/1000))
-        progEnd = endTime.strftime("%Y%m%d%H%M%S +0000")
+        endTime = datetime.datetime.fromtimestamp(int(epg["endEpoch"]/1000), IST)
+        progEnd = endTime.strftime("%Y%m%d%H%M%S +0530")
 
         title = clean_xml_text(epg.get("showname", ""))
         description = clean_xml_text(epg.get("episode_desc") or epg.get("description", ""))
@@ -107,7 +111,7 @@ def writeEpgProgram(channelId, epg, fp):
         pass
 
 def grabEpgAllChannel(day, channelList):
-    print(f"Getting EPG concurrently for all channels for day {day}")
+    print(f"Getting EPG concurrently for all channels for day {day} (IST)")
     programFile = open(f"program{day}.xml", "w", encoding='utf-8')
     
     def fetch_channel(channel):
@@ -172,7 +176,6 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 
 mergeEpgData(channelList)
 
-# epg.xml ला थेट epg.xml.gz मध्ये कॉम्प्रेस करणे
 with open('epg.xml', 'rb') as f_in:
     with gzip.open('epg.xml.gz', 'wb') as f_out:
         shutil.copyfileobj(f_in, f_out)
@@ -184,4 +187,4 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 if os.path.isfile('./channels.xml'):
     os.remove('./channels.xml')
 
-print("epg.xml.gz and epg1d.xml successfully created safely!")
+print("epg.xml.gz and epg1d.xml successfully created with IST time!")
