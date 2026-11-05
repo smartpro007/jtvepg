@@ -4,6 +4,7 @@ import datetime
 import os
 import gzip
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 prevEpgDayCount = 1   # मागील १ दिवस
 nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
@@ -27,19 +28,16 @@ def getChannelsFromFile():
 
 def getEpg(channelId, offset, langId):
     try:
-        # तुझ्या होस्टिंग युआरएलवरून डेटा फेच करणे
         reqUrl = f"{HOSTING_EPG_URL}?id={channelId}&offset={offset}&langId={langId}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         }
         response = requests.get(reqUrl, headers=headers, timeout=10)
-        print(f"Channel {channelId} offset {offset} Status: {response.status_code}")
         if response.status_code == 200:
             apiData = json.loads(response.text or "{}")
             return apiData.get("epg", [])
         return []
     except Exception as e:
-        print(f"Error fetching EPG for {channelId}: {e}")
         return []
 
 def writeEpgChannel(id, name, iconId, fp):
@@ -95,15 +93,28 @@ def writeEpgProgram(channelId, epg, fp):
         pass
 
 def grabEpgAllChannel(day, channelList):
-    print(f"Getting EPG for all channels for day {day}")
+    print(f"Getting EPG concurrently for all channels for day {day}")
     programFile = open(f"program{day}.xml", "w", encoding='utf-8')
-    for channel in channelList:
+    
+    def fetch_channel(channel):
         cId = channel.get("channel_id")
         if cId:
             epgData = getEpg(cId, day, 6)
-            if epgData:
-                for epg in epgData:
-                    writeEpgProgram(cId, epg, programFile)
+            return cId, epgData
+        return None, []
+
+    # एकाच वेळी १५ चॅनेल्सचा डेटा फेच करण्यासाठी ThreadPool वापरला आहे
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(fetch_channel, channel): channel for channel in channelList}
+        for future in as_completed(futures):
+            try:
+                cId, epgData = future.result()
+                if epgData and cId:
+                    for epg in epgData:
+                        writeEpgProgram(cId, epg, programFile)
+            except Exception as e:
+                pass
+
     programFile.close()
 
 def mergeEpgData(channelList):
@@ -160,4 +171,4 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 if os.path.isfile('./channels.xml'):
     os.remove('./channels.xml')
 
-print("epg.xml.gz and epg1d.xml successfully created!")
+print("epg.xml.gz and epg1d.xml successfully created with Multithreading!")
