@@ -7,24 +7,23 @@ import gzip
 import shutil
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 # भारताची वेळ (IST = UTC + 5:30) सेट करणे
 IST = timezone(timedelta(hours=5, minutes=30))
 
-prevEpgDayCount = 1   # मागील १ दिवस
-nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
+# ----------------- जिओटीव्ही सेटिंग्ज -----------------
+JIOTV_CHANNELS_URL = "https://raw.githubusercontent.com/smartpro007/jtvepg/refs/heads/main/channels.json"
+JIOTV_EPG_URL = "https://iptvmax.site/api/epg/epg.php"
+prevEpgDayCount = 1   
+nextEpgDayCount = 2   
 
-# तुझी होस्टिंगची EPG API युआरएल
-HOSTING_EPG_URL = "https://iptvmax.site/api/epg/epg.php"
-
+# ----------------- कॉमन फंक्शन्स -----------------
 def clean_xml_text(text):
     if not text:
         return ""
     text = str(text)
-    
-    # नावाच्या शेवटी येणारे अनावश्यक "-1" किंवा नंबर काढण्यासाठी (उदा. "... -1")
     text = re.sub(r'\s*-\d+\s*$', '', text)
-    
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     text = (text.replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -33,172 +32,228 @@ def clean_xml_text(text):
                 .replace('"', "&quot;"))
     return text
 
-def getChannelsFromFile():
-    if os.path.isfile("channels.json"):
-        try:
-            with open("channels.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-                result = data.get("result", [])
-                if isinstance(result, list):
-                    return result
-                elif isinstance(result, dict):
-                    return list(result.values())
-        except Exception as e:
-            print("Error reading channels.json:", e)
-    return []
-
-def getEpg(channelId, offset, langId):
-    try:
-        reqUrl = f"{HOSTING_EPG_URL}?id={channelId}&offset={offset}&langId={langId}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
-        response = requests.get(reqUrl, headers=headers, timeout=10)
-        if response.status_code == 200:
-            apiData = json.loads(response.text or "{}")
-            return apiData.get("epg", [])
-        return []
-    except Exception as e:
-        return []
-
-def writeEpgChannel(id, name, iconId, fp):
-    if id is None or name is None:
-        return
-    safe_name = clean_xml_text(name)
-    fp.write(f"\t<channel id=\"{id}\">\n")
-    fp.write(f"\t\t<display-name>{safe_name}</display-name>\n")
-    if iconId:
-        fp.write(f"\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/images/{iconId}\"></icon>\n")
-    fp.write("\t</channel>\n")
-
-def writeEpgProgram(channelId, epg, fp):
-    if channelId is None or epg is None:
-        return
-    try:
-        start_epoch_val = int(epg["startEpoch"])
-        if start_epoch_val > 9999999999: 
-            start_epoch_val = start_epoch_val // 1000
-            
-        end_epoch_val = int(epg["endEpoch"])
-        if end_epoch_val > 9999999999:
-            end_epoch_val = end_epoch_val // 1000
-
-        startTime = datetime.datetime.fromtimestamp(start_epoch_val, timezone.utc).astimezone(IST)
-        progStart = startTime.strftime("%Y%m%d%H%M%S +0530")
-
-        endTime = datetime.datetime.fromtimestamp(end_epoch_val, timezone.utc).astimezone(IST)
-        progEnd = endTime.strftime("%Y%m%d%H%M%S +0530")
-
-        # clean_xml_text मुळे नावापुढील '-1' पूर्णपणे निघून जाईल
-        title = clean_xml_text(epg.get("showname", ""))
-        description = clean_xml_text(epg.get("episode_desc") or epg.get("description", ""))
-
-        director = clean_xml_text(epg.get("director", ""))
-        actors = [clean_xml_text(a) for a in str(epg.get("starCast", "")).split(", ")]
-        category = clean_xml_text(epg.get("showCategory", ""))
-        episodeNum = clean_xml_text(epg.get("episode_num", ""))
-
-        fp.write(f"\t<programme start=\"{progStart}\" stop=\"{progEnd}\" channel=\"{channelId}\">\n")
-        fp.write(f"\t\t<title lang=\"en\">{title}</title>\n")
-        fp.write(f"\t\t<desc lang=\"en\">{description}</desc>\n")
-        if director or any(actors):
-            fp.write("\t\t<credits>\n")
-            if director:
-                fp.write(f"\t\t\t<director>{director}</director>\n")
-            if actors:
-                for actor in actors:
-                    if actor.strip():
-                        fp.write(f"\t\t\t<actor>{actor.strip()}</actor>\n")
-            fp.write("\t\t</credits>\n")
-        if category:
-            fp.write(f"\t\t<category lang=\"en\">{category}</category>\n")
-        if episodeNum:
-            fp.write(f"\t\t<episode-num system=\"onscreen\">{episodeNum}</episode-num>\n")
-        
-        poster = epg.get("episodePoster", "")
-        if poster:
-            fp.write(f"\t\t<icon src=\"https://jiotv.catchup.cdn.jio.com/dare_images/shows/{poster}\"></icon>\n")
-        fp.write("\t</programme>\n")
-    except Exception as e:
-        pass
-
-def grabEpgAllChannel(day, channelList):
-    print(f"Getting EPG concurrently for all channels for day {day} (IST)")
+def extract_channels_and_programmes(xml_content):
+    channels = ""
+    programmes = ""
+    ch_start = xml_content.find('<channel')
+    prog_start = xml_content.find('<programme')
     
-    def fetch_channel(channel):
-        cId = channel.get("channel_id")
-        if cId:
-            epgData = getEpg(cId, day, 6)
-            return cId, epgData
-        return None, []
+    if prog_start != -1:
+        channels = xml_content[ch_start:prog_start]
+        programmes = xml_content[prog_start:xml_content.rfind('</tv>')]
+    else:
+        channels = xml_content
+    return channels, programmes
 
-    all_programs = []
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        futures = {executor.submit(fetch_channel, channel): channel for channel in channelList}
-        for future in as_completed(futures):
+# ----------------- स्टेप १: टाटा प्ले EPG जनरेट करणे -----------------
+def generate_tataplay_data():
+    print("\n--- [Step 1/2] Fetching Tata Play EPG ---")
+    
+    today = datetime.datetime.now(IST)
+    dates_to_fetch = [
+        (today - timedelta(days=1)).strftime('%d-%m-%Y'),
+        today.strftime('%d-%m-%Y'),
+        (today + timedelta(days=1)).strftime('%d-%m-%Y')
+    ]
+
+    all_channels_dict = {}
+    headers = {
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://watch.tataplay.com',
+        'Referer': 'https://watch.tataplay.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'content-type': 'application/json',
+        'locale': 'ENG',
+        'me': 'web'
+    }
+
+    for dateStr in dates_to_fetch:
+        print(f"Processing Tata Play Date: {dateStr}")
+        offset = 0
+        limit = 20
+        total = 836
+        request_count = 0
+
+        while offset < total:
+            responseData = None
+            retries = 3
+            while retries > 0:
+                try:
+                    resp = requests.get(
+                        f"https://tm.tapi.videoready.tv/portal-search/pub/api/v1/channels/schedule?date={dateStr}&languageFilters=&genreFilters=&limit={limit}&offset={offset}",
+                        headers=headers, timeout=15
+                    )
+                    responseData = resp.json().get('data')
+                    break
+                except Exception as err:
+                    retries -= 1
+                    time.sleep(60)
+
+            if not responseData or not responseData.get('channelList'):
+                offset += limit
+                continue
+
+            total = responseData.get('total', total)
+            for channel in responseData['channelList']:
+                if channel.get('title') and channel['title'] != '.':
+                    site_id = channel['id']
+                    name = channel['title']
+                    logo = channel.get('transparentImageUrl') or channel.get('thumbnailImage') or ''
+                    items = channel.get('epg', [])
+
+                    if site_id not in all_channels_dict:
+                        all_channels_dict[site_id] = {'id': site_id, 'name': name, 'logo': logo, 'epgItems': []}
+
+                    for item in items:
+                        all_channels_dict[site_id]['epgItems'].append(item)
+
+            offset += limit
+            request_count += 1
+            if request_count % 5 == 0:
+                time.sleep(45)
+            else:
+                time.sleep(2)
+
+    # टाटा प्ले XML स्ट्रक्चर बनवणे
+    tp_xml = ""
+    for ch in all_channels_dict.values():
+        tp_xml += f'  <channel id="{ch["id"]}">\n'
+        tp_xml += f'    <display-name>{clean_xml_text(ch["name"])}</display-name>\n'
+        if ch['logo']:
+            tp_xml += f'    <icon src="{clean_xml_text(ch["logo"])}" />\n'
+        tp_xml += f'  </channel>\n'
+
+    for ch in all_channels_dict.values():
+        for item in ch['epgItems']:
             try:
-                cId, epgData = future.result()
-                if epgData and cId:
-                    for epg in epgData:
-                        all_programs.append((cId, epg))
-            except Exception as e:
+                start_time = datetime.datetime.fromtimestamp(int(item['startTime']) / 1000, IST).strftime('%Y%m%d%H%M%S +0530')
+                end_time = datetime.datetime.fromtimestamp(int(item['endTime']) / 1000, IST).strftime('%Y%m%d%H%M%S +0530')
+                tp_xml += f'  <programme start="{start_time}" stop="{end_time}" channel="{ch["id"]}">\n'
+                tp_xml += f'    <title lang="en">{clean_xml_text(item.get("title", ""))}</title>\n'
+                if item.get('desc'):
+                    tp_xml += f'    <desc lang="en">{clean_xml_text(item["desc"])}</desc>\n'
+                if item.get('boxCoverImage'):
+                    tp_xml += f'    <icon src="{clean_xml_text(item["boxCoverImage"])}" />\n'
+                tp_xml += f'  </programme>\n'
+            except:
                 pass
 
-    with open(f"program{day}.xml", "w", encoding='utf-8') as programFile:
-        for cId, epg in all_programs:
-            writeEpgProgram(cId, epg, programFile)
+    print("Tata Play EPG fetched successfully.")
+    return tp_xml
 
-def mergeEpgData(channelList):
-    with open("channels.xml", "w", encoding='utf-8') as channelFile:
-        for channel in channelList:
-            writeEpgChannel(channel.get("channel_id"), channel.get("channel_name"), channel.get("logoUrl"), channelFile)
+# ----------------- स्टेप २: जिओटीव्ही EPG जनरेट करणे -----------------
+def generate_jiotv_data():
+    print("\n--- [Step 2/2] Fetching JioTV EPG ---")
+    try:
+        resp = requests.get(JIOTV_CHANNELS_URL, timeout=15)
+        data = resp.json()
+        channelList = data.get("result", [])
+        if isinstance(channelList, dict):
+            channelList = list(channelList.values())
+    except Exception as e:
+        print("Error loading JioTV channels:", e)
+        return ""
 
-    with open("channels.xml", "r", encoding='utf-8') as channelsFile:
-        channelsContent = channelsFile.read()
+    print(f"Total JioTV channels loaded: {len(channelList)}")
 
-    with open("epg.xml", "w", encoding='utf-8') as epgFile:
-        epgFile.write("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-        epgFile.write("<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n")
-        epgFile.write("<tv generator-info-name=\"JioTV EPG\" generator-info-url=\"https://github.com\">\n")
-        epgFile.write(channelsContent)
-        for day in range((prevEpgDayCount * -1), nextEpgDayCount):
-            if os.path.isfile(f'./program{day}.xml'):
-                with open(f'./program{day}.xml', "r", encoding='utf-8') as programsFile:
-                    epgFile.write(programsFile.read())
-        epgFile.write("</tv>\n")
+    def get_jio_epg(cId, offset):
+        try:
+            r = requests.get(f"{JIOTV_EPG_URL}?id={cId}&offset={offset}&langId=6", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if r.status_code == 200:
+                return r.json().get("epg", [])
+        except:
+            pass
+        return []
 
-    with open("epg1d.xml", "w", encoding='utf-8') as epgFile1d:
-        epgFile1d.write("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-        epgFile1d.write("<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n")
-        epgFile1d.write("<tv generator-info-name=\"JioTV EPG\" generator-info-url=\"https://github.com\">\n")
-        epgFile1d.write(channelsContent)
-        if os.path.isfile('./program0.xml'):
-            with open('./program0.xml', "r", encoding='utf-8') as programsFile:
-                epgFile1d.write(programsFile.read())
-        epgFile1d.write("</tv>\n")
+    jio_xml = ""
+    # चॅनेल्स जोडणे
+    for channel in channelList:
+        cId = channel.get("channel_id")
+        cName = channel.get("channel_name")
+        logo = channel.get("logoUrl")
+        if cId and cName:
+            jio_xml += f'  <channel id="{cId}">\n'
+            jio_xml += f'    <display-name>{clean_xml_text(cName)}</display-name>\n'
+            if logo:
+                jio_xml += f'    <icon src="https://jiotv.catchup.cdn.jio.com/dare_images/images/{logo}" />\n'
+            jio_xml += f'  </channel>\n'
 
-# Process starts here
-channelList = getChannelsFromFile()
-if not channelList:
-    print("channels.json not found or empty! Exiting.")
-    exit(1)
+    # प्रोग्राम्स जोडणे
+    for day in range((prevEpgDayCount * -1), nextEpgDayCount):
+        print(f"Fetching JioTV EPG for day offset: {day}")
+        def fetch_prog(ch):
+            cId = ch.get("channel_id")
+            if cId:
+                epgs = get_jio_epg(cId, day)
+                return cId, epgs
+            return None, []
 
-print(f"Total channels loaded from JSON: {len(channelList)}")
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            futures = [executor.submit(fetch_prog, ch) for ch in channelList]
+            for future in as_completed(futures):
+                cId, epgs = future.result()
+                if cId and epgs:
+                    for epg in epgs:
+                        try:
+                            start_ep = int(epg["startEpoch"])
+                            if start_ep > 9999999999: start_ep //= 1000
+                            end_ep = int(epg["endEpoch"])
+                            if end_ep > 9999999999: end_ep //= 1000
 
-for day in range((prevEpgDayCount * -1), nextEpgDayCount):
-    grabEpgAllChannel(day, channelList)
+                            start_time = datetime.datetime.fromtimestamp(start_ep, timezone.utc).astimezone(IST).strftime('%Y%m%d%H%M%S +0530')
+                            end_time = datetime.datetime.fromtimestamp(end_ep, timezone.utc).astimezone(IST).strftime('%Y%m%d%H%M%S +0530')
 
-mergeEpgData(channelList)
+                            title = clean_xml_text(epg.get("showname", ""))
+                            desc = clean_xml_text(epg.get("episode_desc") or epg.get("description", ""))
 
-with open('epg.xml', 'rb') as f_in:
-    with gzip.open('epg.xml.gz', 'wb') as f_out:
-        shutil.copyfileobj(f_in, f_out)
+                            jio_xml += f'  <programme start="{start_time}" stop="{end_time}" channel="{cId}">\n'
+                            jio_xml += f'    <title lang="en">{title}</title>\n'
+                            if desc:
+                                jio_xml += f'    <desc lang="en">{desc}</desc>\n'
+                            jio_xml += f'  </programme>\n'
+                        except:
+                            pass
 
-for day in range((prevEpgDayCount * -1), nextEpgDayCount):
-    if os.path.isfile(f'./program{day}.xml'):
-        os.remove(f'./program{day}.xml')
+    print("JioTV EPG fetched successfully.")
+    return jio_xml
 
-if os.path.isfile('./channels.xml'):
-    os.remove('./channels.xml')
+# ----------------- मुख्य प्रक्रिया (Main Execution) -----------------
+def main():
+    print("Starting Combined Tata Play & JioTV EPG Generator...")
 
-print("epg.xml.gz and epg1d.xml successfully created without -1 suffix!")
+    tp_xml_content = generate_tataplay_data()
+    jio_xml_content = generate_jiotv_data()
+
+    tp_ch, tp_prog = extract_channels_and_programmes(tp_xml_content)
+    jio_ch, jio_prog = extract_channels_and_programmes(jio_xml_content)
+
+    final_channels = tp_ch + jio_ch
+    final_programmes = tp_prog + jio_prog
+
+    output_xml = 'final_merged_epg.xml'
+    output_gz = 'final_merged_epg.xml.gz'
+
+    print("\nAssembling final merged XML file...")
+    with open(output_xml, 'w', encoding='utf-8') as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write('<tv generator-info-name="Combined-TataPlay-JioTV-EPG">\n')
+        f.write(final_channels)
+        f.write(final_programmes)
+        f.write('</tv>\n')
+
+    print(f"Compressing to {output_gz}...")
+    with open(output_xml, 'rb') as f_in:
+        with gzip.open(output_gz, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
+    if os.path.exists(output_xml):
+        os.remove(output_xml)
+
+    print("==================================================")
+    print(f"SUCCESS! Final EPG generated: {output_gz}")
+    print("==================================================")
+
+if __name__ == '__main__':
+    main()
+    
