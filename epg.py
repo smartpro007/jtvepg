@@ -8,19 +8,23 @@ import shutil
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# भारताची वेळ (IST = UTC + 5:30) सेट करणे (गो-लँगच्या लॉजिकप्रमाणे अचूक वेळेसाठी)
+# भारताची वेळ (IST = UTC + 5:30) सेट करणे
 IST = timezone(timedelta(hours=5, minutes=30))
 
 prevEpgDayCount = 1   # मागील १ दिवस
 nextEpgDayCount = 2   # पुढील २ दिवस (वर्तमान दिवसासह)
 
-# तुझी होस्टिंगची EPG API युआरएल (तशीच ठेवली आहे)
+# तुझी होस्टिंगची EPG API युआरएल
 HOSTING_EPG_URL = "https://iptvmax.site/api/epg/epg.php"
 
 def clean_xml_text(text):
     if not text:
         return ""
     text = str(text)
+    
+    # नावाच्या शेवटी येणारे अनावश्यक "-1" किंवा नंबर काढण्यासाठी (उदा. "... -1")
+    text = re.sub(r'\s*-\d+\s*$', '', text)
+    
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     text = (text.replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -71,7 +75,6 @@ def writeEpgProgram(channelId, epg, fp):
     if channelId is None or epg is None:
         return
     try:
-        # गो-लँग कोडमधील लॉजिकप्रमाणे Epoch सेफली हँडल करणे (मिलिसेकंड्स असल्यास सेकंदात करणे)
         start_epoch_val = int(epg["startEpoch"])
         if start_epoch_val > 9999999999: 
             start_epoch_val = start_epoch_val // 1000
@@ -80,13 +83,13 @@ def writeEpgProgram(channelId, epg, fp):
         if end_epoch_val > 9999999999:
             end_epoch_val = end_epoch_val // 1000
 
-        # अचूक भारतीय वेळ (IST +0530) सेट करणे जेणेकरून प्रेझेंट प्रोग्राम वेळेवर दिसेल
         startTime = datetime.datetime.fromtimestamp(start_epoch_val, timezone.utc).astimezone(IST)
         progStart = startTime.strftime("%Y%m%d%H%M%S +0530")
 
         endTime = datetime.datetime.fromtimestamp(end_epoch_val, timezone.utc).astimezone(IST)
         progEnd = endTime.strftime("%Y%m%d%H%M%S +0530")
 
+        # clean_xml_text मुळे नावापुढील '-1' पूर्णपणे निघून जाईल
         title = clean_xml_text(epg.get("showname", ""))
         description = clean_xml_text(epg.get("episode_desc") or epg.get("description", ""))
 
@@ -120,7 +123,7 @@ def writeEpgProgram(channelId, epg, fp):
         pass
 
 def grabEpgAllChannel(day, channelList):
-    print(f"Getting EPG concurrently for all channels for day {day} (IST with Safe List)")
+    print(f"Getting EPG concurrently for all channels for day {day} (IST)")
     
     def fetch_channel(channel):
         cId = channel.get("channel_id")
@@ -130,7 +133,6 @@ def grabEpgAllChannel(day, channelList):
         return None, []
 
     all_programs = []
-    # मल्टिथ्रेडिंग वापरून सुरक्षितपणे डेटा लिस्टमध्ये गोळा करणे (फाईल कोरी होण्यास प्रतिबंध)
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {executor.submit(fetch_channel, channel): channel for channel in channelList}
         for future in as_completed(futures):
@@ -199,4 +201,4 @@ for day in range((prevEpgDayCount * -1), nextEpgDayCount):
 if os.path.isfile('./channels.xml'):
     os.remove('./channels.xml')
 
-print("epg.xml.gz and epg1d.xml successfully created with Go logic & Safe Multithreading!")
+print("epg.xml.gz and epg1d.xml successfully created without -1 suffix!")
